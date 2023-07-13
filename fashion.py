@@ -1,3 +1,4 @@
+import random
 import torchvision
 from torchvision.datasets import FashionMNIST
 from torchvision.transforms import ToTensor
@@ -9,21 +10,29 @@ import torch.utils.data
 import matplotlib.pyplot as plt
 
 class ConvFashion(nn.Module):
-    def __init__(self, input_size, kernel_dim, output_dim):
+    def __init__(self, output_channels, kernel_dim):
         super(ConvFashion, self).__init__()
 
-        self.conv1 = nn.Conv2d(1, input_size, kernel_dim)
+        #in: 1x28x28 out: output_channelsx28x28
+        self.conv1 = nn.Conv2d(1, output_channels, kernel_dim)
         self.act1 = nn.ReLU()
         self.drop1 = nn.Dropout(0.3)
 
-        self.conv2 = nn.Conv2d(input_size, input_size, kernel_dim)
+        #in: output_channelsx28x28 out: output_channelsx28x28
+        self.conv2 = nn.Conv2d(output_channels, output_channels, kernel_dim)
         self.act2 = nn.ReLU()
+
+        #in: output_channelsx28x28 out: output_channelsx12x12
         self.pool2 = nn.MaxPool2d(2);
 
+        #in: output_channelsx12x12 out: output_channels*12*12
         self.flat = nn.Flatten()
 
-        self.fc3 = nn.Linear(4032, 512)
+        #in: output_channels*144 out: 512
+        self.fc3 = nn.Linear(output_channels*144, 512)
         self.act3 = nn.ReLU()
+
+        #in: 512 out: 10 
         self.fc4 = nn.Linear(512, 10)
         self.softmax = nn.Softmax(dim=1)
 
@@ -35,7 +44,7 @@ class ConvFashion(nn.Module):
         x = self.drop1(x)
         #input:  28x28x28 output: 28x28x28
         x = self.act2(self.conv2(x))
-        #input: 28x28x28 output:28x14x14
+        #input: 28x28x28 output:28x27x27
         x = self.pool2(x)
         #input: 28x14x14 output: 5488
         x = self.flat(x)
@@ -45,12 +54,11 @@ class ConvFashion(nn.Module):
         x = self.softmax(self.fc4(x))
         return x 
 
-def train(data: torch.utils.data.Dataset, max_epochs: int = 5, seed=1337):
+def train(net: nn.Module, data: torch.utils.data.Dataset, max_epochs: int = 5, seed=1337):
     
     torch.manual_seed(seed)
 
     loss = nn.CrossEntropyLoss()
-    net = ConvFashion(28, 3, 10)
     optimizer = torch.optim.Adam(net.parameters())
 
     losses = []
@@ -83,9 +91,8 @@ def train(data: torch.utils.data.Dataset, max_epochs: int = 5, seed=1337):
 
     return net;
 
-def test(data: torch.utils.data.Dataset, model):
+def test(data: torch.utils.data.Dataset, model, classes):
 
-    classes = ('T-shirt', 'Pants', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Shoe', 'Bag', 'Boot')
     dataloader = torch.utils.data.DataLoader(data, batch_size=64, shuffle=True)
     total = 0
     correct = 0
@@ -107,19 +114,47 @@ def test(data: torch.utils.data.Dataset, model):
                 total_pred[classes[label]] += 1
 
     print("================================= END TESTING ==================================")
-    print(f'overall accuracy: {correct / total}')
+
+    accuracy = correct / total
+    accs_classes = {}
+
+    print(f'overall accuracy: {accuracy}')
     for classname, correct_count in correct_pred.items():
+        accs_classes[classname] = correct_count / total_pred[classname]
         print(f'accuracy for class {classname}: {float(correct_count) / total_pred[classname]}')
 
-
+    
+    return accuracy, accs_classes
 
 
 def main():
+    classes = ('T-shirt', 'Pants', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Shoe', 'Bag', 'Boot')
     D = FashionMNIST(root = './FashionMNIST', download = True, transform=ToTensor())
     T = FashionMNIST(root = './FashionMNIST_Test',  download=True, train=False, transform=ToTensor())
-    trained_model = train(D)
-    test(T, trained_model)
+    
+    accs = []
+    accs_classes = {c: [] for c in classes}
 
+    #change output channels
+    for output_channels in range(100):
+
+        model = ConvFashion(output_channels + 1, 3)
+        trained_model = train(model, D)
+
+        acc, acc_classes = test(T, trained_model, classes)
+        accs.append(acc)
+
+        for c in classes:
+            accs_classes[c].append(acc_classes)
+
+
+    plt.plot(accs)
+    fig, ax = plt.subplots(len(classes)//2, 5, )
+    for c, i in zip(classes, range(len(classes))):
+        ax.flat[i].plot(accs_classes[c])
+
+
+    plt.show()
 
 if __name__ == '__main__':
     main()
