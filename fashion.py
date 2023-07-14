@@ -1,69 +1,25 @@
-import random
-import torchvision
 from torchvision.datasets import FashionMNIST
 from torchvision.transforms import ToTensor
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.utils.data
+from torch.nn import Module, CrossEntropyLoss
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
 
 import matplotlib.pyplot as plt
 
-class ConvFashion(nn.Module):
-    def __init__(self, output_channels, kernel_dim):
-        super(ConvFashion, self).__init__()
-
-        #in: 1x28x28 out: output_channelsx28x28
-        self.conv1 = nn.Conv2d(1, output_channels, kernel_dim)
-        self.act1 = nn.ReLU()
-        self.drop1 = nn.Dropout(0.3)
-
-        #in: output_channelsx28x28 out: output_channelsx28x28
-        self.conv2 = nn.Conv2d(output_channels, output_channels, kernel_dim)
-        self.act2 = nn.ReLU()
-
-        #in: output_channelsx28x28 out: output_channelsx12x12
-        self.pool2 = nn.MaxPool2d(2);
-
-        #in: output_channelsx12x12 out: output_channels*12*12
-        self.flat = nn.Flatten()
-
-        #in: output_channels*144 out: 512
-        self.fc3 = nn.Linear(output_channels*144, 512)
-        self.act3 = nn.ReLU()
-
-        #in: 512 out: 10 
-        self.fc4 = nn.Linear(512, 10)
-        self.softmax = nn.Softmax(dim=1)
-
-
-
-    def forward(self, x):
-        #input: 1x28x28 output: 28x28x28
-        x = self.act1(self.conv1(x))
-        x = self.drop1(x)
-        #input:  28x28x28 output: 28x28x28
-        x = self.act2(self.conv2(x))
-        #input: 28x28x28 output:28x27x27
-        x = self.pool2(x)
-        #input: 28x14x14 output: 5488
-        x = self.flat(x)
-        #input: 5488 output: 512
-        x = self.act3(self.fc3(x))
-        #input: 512 output:10
-        x = self.softmax(self.fc4(x))
-        return x 
-
-def train(net: nn.Module, data: torch.utils.data.Dataset, max_epochs: int = 5, seed=1337):
+from model import ConvFashion 
+#for conv channels plateaus at 16 ish
+#channel ratio between conv1 and conv2 plateaus at about 4
+def train(net: Module, data: Dataset, max_epochs: int = 5, seed=1337):
     
     torch.manual_seed(seed)
 
-    loss = nn.CrossEntropyLoss()
+    loss = CrossEntropyLoss()
     optimizer = torch.optim.Adam(net.parameters())
 
     losses = []
         
-    train_data_loader = torch.utils.data.DataLoader(data, batch_size=64, shuffle=True)
+    train_data_loader = DataLoader(data, batch_size=64, shuffle=True)
 
 
     print("================================ START TRAINING ================================")
@@ -91,9 +47,9 @@ def train(net: nn.Module, data: torch.utils.data.Dataset, max_epochs: int = 5, s
 
     return net;
 
-def test(data: torch.utils.data.Dataset, model, classes):
+def test(data: Dataset, model: Module, classes: list):
 
-    dataloader = torch.utils.data.DataLoader(data, batch_size=64, shuffle=True)
+    dataloader = DataLoader(data, batch_size=64, shuffle=True)
     total = 0
     correct = 0
     correct_pred = {classname: 0 for classname in classes}
@@ -126,34 +82,53 @@ def test(data: torch.utils.data.Dataset, model, classes):
     
     return accuracy, accs_classes
 
-
-def main():
-    classes = ('T-shirt', 'Pants', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Shoe', 'Bag', 'Boot')
-    D = FashionMNIST(root = './FashionMNIST', download = True, transform=ToTensor())
-    T = FashionMNIST(root = './FashionMNIST_Test',  download=True, train=False, transform=ToTensor())
-    
+def tuneKernel(testX: Dataset, X: Dataset, classes: list) -> int:
     accs = []
     accs_classes = {c: [] for c in classes}
 
-    #change output channels
-    for output_channels in range(100):
+    for kernel in range(7):
 
-        model = ConvFashion(output_channels + 1, 3)
-        trained_model = train(model, D)
+        model = ConvFashion(16, 16*4, kernel)
+        trained_model = train(model, X)
 
-        acc, acc_classes = test(T, trained_model, classes)
+        acc, acc_classes = test(testX, trained_model, classes)
         accs.append(acc)
 
         for c in classes:
             accs_classes[c].append(acc_classes)
 
+    plt.plot(accs)
+    return int(np.argmax(np.array(accs)) + 1)
+
+def tuneChannelRatio(testX: Dataset, X: Dataset, classes: list) -> float:
+    accs = []
+    accs_classes = {c: [] for c in classes}
+
+    ratios = [1/8, 1/4, 1/2, 1, 2, 4, 8]
+    for ratio in ratios:
+
+        model = ConvFashion(16, 16*ratio, 3)
+        trained_model = train(model, X)
+
+        acc, acc_classes = test(testX, trained_model, classes)
+        accs.append(acc)
+
+        for c in classes:
+            accs_classes[c].append(acc_classes)
 
     plt.plot(accs)
-    fig, ax = plt.subplots(len(classes)//2, 5, )
-    for c, i in zip(classes, range(len(classes))):
-        ax.flat[i].plot(accs_classes[c])
+    return ratios[np.argmax(np.array(accs))]
 
+def main():
+    classes = ['T-shirt', 'Pants', 'Pullover', 'Dress', 'Coat', 'Sandal', 'Shirt', 'Shoe', 'Bag', 'Boot']
+    D = FashionMNIST(root = './FashionMNIST', download = True, transform=ToTensor())
+    T = FashionMNIST(root = './FashionMNIST_Test',  download=True, train=False, transform=ToTensor())
 
+    #ratio = tuneKernel(D, T, classes)
+    #print(f'best Convolution Layers Channel Ratio: {ratio}')
+
+    kernel = tuneKernel(D, T, classes)
+    print(f'best Convolution Kernel Size: {kernel}')
     plt.show()
 
 if __name__ == '__main__':
